@@ -11,15 +11,21 @@
 #define STOP_TIMER(a)
 #endif
 
-#define AVFFT     0
 #define FFTW      0
+#define AVFFT     0
 
 #define FFT_LEN   8
 #define DOUBLE    1
+#define MDCT      0
 #define REPS     (1 << 0)
 #define IN_PLACE  0
 #define NO_SIMD   0
 #define INVERSE   0
+
+#if MDCT == 1
+#undef FFTW
+#define FFTW 0
+#endif
 
 #if DOUBLE == 1
 #undef AVFFT
@@ -37,8 +43,10 @@
 #if DOUBLE
 #undef AVFFT
 #define AVFFT 0
+typedef double TXSample;
 typedef AVComplexDouble TXComplex;
 #else
+typedef float TXSample;
 typedef AVComplexFloat TXComplex;
 #endif
 
@@ -47,17 +55,56 @@ TXComplex cmult(TXComplex z1, TXComplex z2)
 TXComplex cadd(TXComplex z1, TXComplex z2)
     { TXComplex res; res.re = z1.re + z2.re; res.im = z1.im + z2.im; return res; }
 
-void do_naive_tx(int inv, TXComplex *output, TXComplex *input, int N)
+static void naive_fft(TXComplex *output, TXComplex *input, int len)
 {
-    double phase = inv ? 2*M_PI : -2*M_PI;
+    double phase = INVERSE ? 2*M_PI : -2*M_PI;
 
-    for(int i = 0; i < N; i++) {
+    for(int i = 0; i < len; i++) {
         TXComplex tmp = { 0 };
-        for(int j = 0; j < N; j++) {
-            TXComplex twiddle = { cos(phase*j*i/N), sin(phase*j*i/N), };
+        for(int j = 0; j < len; j++) {
+            TXComplex twiddle = { cos(phase*j*i/len), sin(phase*j*i/len) };
         	tmp = cadd(tmp, cmult(input[j], twiddle));
         }
         output[i] = tmp;
+    }
+}
+
+static void naive_imdct(TXSample *dst, TXSample *src, int len)
+{
+    len >>= 1;
+
+    int len2 = len*2;
+    const double phase = M_PI/(4.0*len2);
+
+    for (int i = 0; i < len; i++) {
+        double sum_d = 0.0;
+        double sum_u = 0.0;
+        double i_d = phase * (4*len  - 2*i - 1);
+        double i_u = phase * (3*len2 + 2*i + 1);
+        for (int j = 0; j < len2; j++) {
+            double a = (2 * j + 1);
+            double a_d = cos(a * i_d);
+            double a_u = cos(a * i_u);
+            double val = src[j];
+            sum_d += a_d * val;
+            sum_u += a_u * val;
+        }
+        dst[i +   0] =  sum_d;
+        dst[i + len] = -sum_u;
+    }
+}
+
+static void naive_mdct(TXSample *dst, TXSample *src, int len)
+{
+    const double phase = M_PI/(4.0*len);
+
+    for (int i = 0; i < len; i++) {
+        double sum = 0.0;
+        for (int j = 0; j < len*2; j++) {
+            int a = (2*j + 1 + len) * (2*i + 1);
+            sum += src[j] * cos(a * phase);
+        }
+        dst[i] = sum;
     }
 }
 
@@ -67,22 +114,44 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
     for (int i = 0; i < REPS; i++) {
         if (IN_PLACE)
             memcpy(output, input, len*sizeof(TXComplex));
-
         START_TIMER
-        tx(s, output, IN_PLACE ? output : input, sizeof(TXComplex));
-        STOP_TIMER("             av_tx_fn");
+        tx(s, output, IN_PLACE ? output : input, sizeof(TXComplex) >> MDCT);
+#if MDCT
+#if INVERSE
+        STOP_TIMER("      av_tx_fn(imdct)");
+#else
+        STOP_TIMER("       av_tx_fn(mdct)");
+#endif
+#else
+        STOP_TIMER("        av_tx_fn(fft)");
+#endif
     }
 }
 
 #if AVFFT
 void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
 {
+#if !MDCT && IN_PLACE
+    memcpy(output, input, len*sizeof(TXComplex));
+#endif
     for (int i = 0; i < REPS; i++) {
         START_TIMER
+#if !MDCT && !IN_PLACE
         memcpy(output, input, len*sizeof(TXComplex));
+#endif
+#if MDCT
+#if INVERSE
+        av_imdct_half(avfft, (FFTSample *)output, (const FFTSample *)input);
+        STOP_TIMER("        av_imdct_half");
+#else
+        av_mdct_calc(avfft, (FFTSample *)output, (const FFTSample *)input);
+        STOP_TIMER("         av_mdct_calc");
+#endif
+#else
         av_fft_permute(avfft, (FFTComplex *)output);
         av_fft_calc(avfft, (FFTComplex *)output);
         STOP_TIMER("  av_fft_permute+calc");
+#endif
     }
 }
 #endif
@@ -128,9 +197,14 @@ int main(void)
         av_force_cpu_flags(0);
 
     AVTXContext *avfftctx;
-    TXComplex scale = { 1.0f };
-    int ret = av_tx_init(&avfftctx, &tx, DOUBLE ? AV_TX_DOUBLE_FFT : AV_TX_FLOAT_FFT,
-                         inv, tx_len, &scale.re,
+    TXSample scale = 1.0;
+    int ret = av_tx_init(&avfftctx, &tx,
+#if MDCT
+                         DOUBLE ? AV_TX_DOUBLE_MDCT : AV_TX_FLOAT_MDCT,
+#else
+                         DOUBLE ? AV_TX_DOUBLE_FFT : AV_TX_FLOAT_FFT,
+#endif
+                         inv, tx_len, &scale,
                          (IN_PLACE ? AV_TX_INPLACE : 0x0) |
                          (NO_SIMD ? AV_TX_UNALIGNED : 0x0));
     if (ret) {
@@ -150,7 +224,11 @@ int main(void)
     TXComplex *output_naive = av_mallocz(sizeof(TXComplex)*tx_len);
 
 #if AVFFT
+#if MDCT
+    FFTContext *avfft = av_mdct_init(av_log2(tx_len) + 1, inv, 1.0);
+#else
     FFTContext *avfft = av_fft_init(av_log2(tx_len), inv);
+#endif
 #endif
 #if FFTW
 #if DOUBLE
@@ -188,7 +266,15 @@ int main(void)
 #if FFTW
     do_fftw_tx(fftw_plan, output_fftw, input, tx_len);
 #endif
-    do_naive_tx(inv, output_naive, input, tx_len);
+#if MDCT
+#if INVERSE
+    naive_imdct((TXSample *)output_naive, (TXSample *)input, tx_len);
+#else
+    naive_mdct((TXSample *)output_naive, (TXSample *)input, tx_len);
+#endif
+#else
+    naive_fft(output_naive, input, tx_len);
+#endif
 
     compare_results(output_naive, output_new, tx_len, " avtx");
 #if FFTW
@@ -208,7 +294,11 @@ int main(void)
 #endif
 
 #if AVFFT
+#if MDCT
+    av_mdct_end(avfft);
+#else
     av_fft_end(avfft);
+#endif
 #endif
     av_tx_uninit(&avfftctx);
 
