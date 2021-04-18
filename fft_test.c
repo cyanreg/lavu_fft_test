@@ -14,7 +14,7 @@
 #define FFTW      0
 #define AVFFT     0
 
-#define FFT_LEN   64
+#define FFT_LEN   256
 #define DOUBLE    0
 #define MDCT      0
 #define REPS     (1 << 0)
@@ -261,6 +261,9 @@ int main(void)
         av_log(NULL, AV_LOG_WARNING, "ERROR = %s\n", av_err2str(ret));
         return 1;
     }
+
+    printf("Length: %i\n", tx_len);
+    printf("Function: %p\n", tx);
 
     TXComplex *input = av_mallocz(sizeof(TXComplex)*tx_len);
 #if AVFFT
