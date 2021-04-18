@@ -2,6 +2,7 @@
 #include <libavutil/mem.h>
 #include <libavutil/lfg.h>
 #include <libavutil/tx.h>
+#include <libavutil/time.h>
 #include <libavutil/random_seed.h>
 
 #if 1
@@ -142,6 +143,8 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
     memcpy(output, input, len*sizeof(TXComplex));
 #endif
 
+    int64_t start = av_gettime_relative();
+
     for (int i = 0; i < REPS; i++) {
         START_TIMER
         tx(s, output, IN_PLACE ? output : input, sizeof(TXComplex) >> MDCT);
@@ -159,6 +162,8 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
 #endif
 #endif
     }
+
+    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
 }
 
 #if AVFFT
@@ -167,6 +172,8 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
 #if !MDCT && IN_PLACE
     memcpy(output, input, len*sizeof(TXComplex));
 #endif
+
+    int64_t start = av_gettime_relative();
 
     for (int i = 0; i < REPS; i++) {
         START_TIMER
@@ -193,6 +200,8 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
         STOP_TIMER("  av_fft_permute+calc");
 #endif
     }
+
+    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
 }
 #endif
 
@@ -207,6 +216,8 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *input, int l
     memcpy(output, input, len*sizeof(TXComplex));
 #endif
 
+    int64_t start = av_gettime_relative();
+
     for (int i = 0; i < REPS; i++) {
         START_TIMER
 #if DOUBLE
@@ -217,6 +228,8 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *input, int l
         STOP_TIMER("        fftwf_execute");
 #endif
     }
+
+    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
 }
 #endif
 
