@@ -8,19 +8,21 @@
 #include <libavutil/timer.h>
 #else
 #define START_TIMER
-#define STOP_TIMER(a)
+#define STOP_TIMER(x)
 #endif
 
 #define FFTW      0
 #define AVFFT     0
 
-#define FFT_LEN   8
-#define DOUBLE    1
+#define FFT_LEN   64
+#define DOUBLE    0
 #define MDCT      0
 #define REPS     (1 << 0)
 #define IN_PLACE  0
 #define NO_SIMD   0
 #define INVERSE   0
+#define IMDCT_F   0
+#define SEED      12312
 
 #if MDCT == 1
 #undef FFTW
@@ -50,10 +52,21 @@ typedef float TXSample;
 typedef AVComplexFloat TXComplex;
 #endif
 
-TXComplex cmult(TXComplex z1, TXComplex z2)
-    { TXComplex res; res.re = z1.re*z2.re - z1.im*z2.im; res.im = z2.re*z1.im + z1.re*z2.im; return res; }
-TXComplex cadd(TXComplex z1, TXComplex z2)
-    { TXComplex res; res.re = z1.re + z2.re; res.im = z1.im + z2.im; return res; }
+static TXComplex cmult(TXComplex z1, TXComplex z2)
+{
+    TXComplex res;
+    res.re = z1.re*z2.re - z1.im*z2.im;
+    res.im = z2.re*z1.im + z1.re*z2.im;
+    return res;
+}
+
+static TXComplex cadd(TXComplex z1, TXComplex z2)
+{
+    TXComplex res;
+    res.re = z1.re + z2.re;
+    res.im = z1.im + z2.im;
+    return res;
+}
 
 static void naive_fft(TXComplex *output, TXComplex *input, int len)
 {
@@ -94,6 +107,20 @@ static void naive_imdct(TXSample *dst, TXSample *src, int len)
     }
 }
 
+static void naive_imdct_full(TXSample *dst, TXSample *src, int len)
+{
+    const double phase = M_PI/(4.0*len);
+
+    for (int i = 0; i < len*2; i++) {
+        double sum = 0.0;
+        for (int j = 0; j < len; j++) {
+            int a = (2 * i + 1 + len) * (2 * j + 1);
+            sum += src[j] * cos(M_PI * a / (double) (4 * len));
+        }
+        dst[i] = -sum;
+    }
+}
+
 static void naive_mdct(TXSample *dst, TXSample *src, int len)
 {
     const double phase = M_PI/(4.0*len);
@@ -111,19 +138,25 @@ static void naive_mdct(TXSample *dst, TXSample *src, int len)
 av_tx_fn tx;
 void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
 {
+#if IN_PLACE
+    memcpy(output, input, len*sizeof(TXComplex));
+#endif
+
     for (int i = 0; i < REPS; i++) {
-        if (IN_PLACE)
-            memcpy(output, input, len*sizeof(TXComplex));
         START_TIMER
         tx(s, output, IN_PLACE ? output : input, sizeof(TXComplex) >> MDCT);
 #if MDCT
 #if INVERSE
-        STOP_TIMER("      av_tx_fn(imdct)");
+        STOP_TIMER("        av_tx (imdct)");
 #else
-        STOP_TIMER("       av_tx_fn(mdct)");
+        STOP_TIMER("         av_tx (mdct)");
 #endif
 #else
-        STOP_TIMER("        av_tx_fn(fft)");
+#if INVERSE
+        STOP_TIMER("         av_tx (ifft)");
+#else
+        STOP_TIMER("          av_tx (fft)");
+#endif
 #endif
     }
 }
@@ -134,15 +167,22 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
 #if !MDCT && IN_PLACE
     memcpy(output, input, len*sizeof(TXComplex));
 #endif
+
     for (int i = 0; i < REPS; i++) {
         START_TIMER
 #if !MDCT && !IN_PLACE
         memcpy(output, input, len*sizeof(TXComplex));
 #endif
+
 #if MDCT
 #if INVERSE
+#if IMDCT_F
+        av_imdct_calc(avfft, (FFTSample *)output, (const FFTSample *)input);
+        STOP_TIMER("        av_imdct_calc");
+#else
         av_imdct_half(avfft, (FFTSample *)output, (const FFTSample *)input);
         STOP_TIMER("        av_imdct_half");
+#endif
 #else
         av_mdct_calc(avfft, (FFTSample *)output, (const FFTSample *)input);
         STOP_TIMER("         av_mdct_calc");
@@ -163,16 +203,19 @@ void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *input, int le
 void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *input, int len)
 #endif
 {
+#if IN_PLACE
+    memcpy(output, input, len*sizeof(TXComplex));
+#endif
+
     for (int i = 0; i < REPS; i++) {
-        if (IN_PLACE)
-            memcpy(output, input, len*sizeof(TXComplex));
         START_TIMER
 #if DOUBLE
         fftw_execute(fftw_plan);
+        STOP_TIMER("         fftw_execute");
 #else
         fftwf_execute(fftw_plan);
-#endif
         STOP_TIMER("        fftwf_execute");
+#endif
     }
 }
 #endif
@@ -196,6 +239,12 @@ int main(void)
     if (NO_SIMD)
         av_force_cpu_flags(0);
 
+    printf("Mode: %s %s\n", INVERSE ? "inverse" : "forward",
+           MDCT ? IMDCT_F ? "mdct (half)" : "mdct" : "fft");
+
+    uint32_t seed = !SEED ? av_get_random_seed() : SEED;
+    printf("Seed: 0x%x\n", seed);
+
     AVTXContext *avfftctx;
     TXSample scale = 1.0;
     int ret = av_tx_init(&avfftctx, &tx,
@@ -206,9 +255,10 @@ int main(void)
 #endif
                          inv, tx_len, &scale,
                          (IN_PLACE ? AV_TX_INPLACE : 0x0) |
+                         (IMDCT_F ? AV_TX_FULL_IMDCT : 0x0) |
                          (NO_SIMD ? AV_TX_UNALIGNED : 0x0));
     if (ret) {
-        av_log(NULL, AV_LOG_WARNING, "ERRROR = %i\n", ret);
+        av_log(NULL, AV_LOG_WARNING, "ERROR = %s\n", av_err2str(ret));
         return 1;
     }
 
@@ -225,7 +275,7 @@ int main(void)
 
 #if AVFFT
 #if MDCT
-    FFTContext *avfft = av_mdct_init(av_log2(tx_len) + 1, inv, 1.0);
+    FFTContext *avfft = av_mdct_init(av_log2(tx_len) + 1, inv, scale);
 #else
     FFTContext *avfft = av_fft_init(av_log2(tx_len), inv);
 #endif
@@ -248,7 +298,7 @@ int main(void)
 #endif
 #endif
 
-//    srand(av_get_random_seed());
+    srand(seed);
 
     for (int i = 0; i < tx_len; i++) {
         TXComplex gen = {
@@ -268,7 +318,11 @@ int main(void)
 #endif
 #if MDCT
 #if INVERSE
+#if IMDCT_F
+    naive_imdct_full((TXSample *)output_naive, (TXSample *)input, tx_len);
+#else
     naive_imdct((TXSample *)output_naive, (TXSample *)input, tx_len);
+#endif
 #else
     naive_mdct((TXSample *)output_naive, (TXSample *)input, tx_len);
 #endif
@@ -276,13 +330,17 @@ int main(void)
     naive_fft(output_naive, input, tx_len);
 #endif
 
-    compare_results(output_naive, output_new, tx_len, " avtx");
+    compare_results(output_naive, output_new, tx_len,      "  av_tx");
 #if FFTW
-    compare_results(output_naive, output_fftw, tx_len, " fftw");
+#if DOUBLE
+    compare_results(output_naive, output_fftw, tx_len,     "  fftw3");
+#else
+    compare_results(output_naive, output_fftw, tx_len,     " fftw3f");
+#endif
 #endif
 #if AVFFT
     if (!(tx_len & (tx_len - 1)))
-        compare_results(output_naive, output_lavc, tx_len, "avfft");
+        compare_results(output_naive, output_lavc, tx_len, "  avfft");
 #endif
 
 #if FFTW
