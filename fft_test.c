@@ -15,7 +15,7 @@
 #define FFTW      0
 #define AVFFT     0
 
-#define FFT_LEN   256
+#define FFT_LEN   1024
 #define DOUBLE    0
 #define MDCT      0
 #define REPS     (1 << 0)
@@ -23,7 +23,7 @@
 #define NO_SIMD   0
 #define INVERSE   0
 #define IMDCT_F   0
-#define SEED      12312
+#define SEED      0
 
 #if MDCT == 1
 #undef FFTW
@@ -163,7 +163,9 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
 #endif
     }
 
-    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
+    if (REPS > 1)
+        printf("Total for len %i reps %i = %f s\n", len, REPS,
+               (av_gettime_relative() - (double)start)/1000000.0);
 }
 
 #if AVFFT
@@ -201,7 +203,9 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
 #endif
     }
 
-    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
+    if (REPS > 1)
+        printf("Total for len %i reps %i = %f s\n", len, REPS,
+               (av_gettime_relative() - (double)start)/1000000.0);
 }
 #endif
 
@@ -229,7 +233,9 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *input, int l
 #endif
     }
 
-    printf("Total = %f s\n", (av_gettime_relative() - (double)start)/1000000.0);
+    if (REPS > 1)
+        printf("Total for len %i reps %i = %f s\n", len, REPS,
+               (av_gettime_relative() - (double)start)/1000000.0);
 }
 #endif
 
