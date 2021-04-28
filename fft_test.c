@@ -15,10 +15,10 @@
 #define FFTW      0
 #define AVFFT     0
 
-#define FFT_LEN   1024
-#define DOUBLE    0
+#define FFT_LEN   8
+#define DOUBLE    1
 #define MDCT      0
-#define REPS     (1 << 0)
+#define REPS     (1 << 25)
 #define IN_PLACE  0
 #define NO_SIMD   0
 #define INVERSE   0
@@ -71,6 +71,8 @@ static TXComplex cadd(TXComplex z1, TXComplex z2)
 
 static void naive_fft(TXComplex *output, TXComplex *input, int len)
 {
+    return;
+
     double phase = INVERSE ? 2*M_PI : -2*M_PI;
 
     for(int i = 0; i < len; i++) {
@@ -353,6 +355,7 @@ int main(void)
 #endif
 
     compare_results(output_naive, output_new, tx_len,      "  av_tx");
+
 #if FFTW
 #if DOUBLE
     compare_results(output_naive, output_fftw, tx_len,     "  fftw3");
@@ -360,6 +363,7 @@ int main(void)
     compare_results(output_naive, output_fftw, tx_len,     " fftw3f");
 #endif
 #endif
+
 #if AVFFT
     if (!(tx_len & (tx_len - 1)))
         compare_results(output_naive, output_lavc, tx_len, "  avfft");
