@@ -5,7 +5,7 @@
 #include <libavutil/time.h>
 #include <libavutil/random_seed.h>
 
-#if 1
+#if 0
 #include <libavutil/timer.h>
 #else
 #define START_TIMER
@@ -18,7 +18,7 @@
 #define C2R       3
 
 #define MODE C2R
-#define INVERSE   1 // Transform direction (only for MDCT and FFT)
+#define INVERSE   0 // Transform direction (only for MDCT and FFT)
 
 /* Double-precision instead of float */
 #define DOUBLE    0
@@ -26,10 +26,10 @@
 #define FFTW      1
 #define AVFFT     1
 
-#define FFT_LEN   32
+#define FFT_LEN   16
 #define REPS     (1 << 0)
 #define IN_PLACE  0
-#define NO_SIMD   1
+#define NO_SIMD   0
 #define IMDCT_F   0
 #define SEED      0x8063
 #define PRINTOUT  1
@@ -78,7 +78,7 @@ static TXComplex cadd(TXComplex z1, TXComplex z2)
     return res;
 }
 
-static void naive_fft(TXComplex *output, TXComplex *input, int len)
+static av_unused void naive_fft(TXComplex *output, TXComplex *input, int len)
 {
     double phase = INVERSE ? 2*M_PI : -2*M_PI;
 
@@ -92,7 +92,7 @@ static void naive_fft(TXComplex *output, TXComplex *input, int len)
     }
 }
 
-static void naive_rdft_r2c(TXComplex *output, TXComplex *input, int len)
+static av_unused void naive_rdft_r2c(TXComplex *output, TXComplex *input, int len)
 {
     TXSample *in = (TXSample *)input;
     double phase = -2*M_PI;
@@ -109,7 +109,7 @@ static void naive_rdft_r2c(TXComplex *output, TXComplex *input, int len)
     }
 }
 
-static void naive_rdft_c2r(TXComplex *output, TXComplex *input, int len)
+static av_unused void naive_rdft_c2r(TXComplex *output, TXComplex *input, int len)
 {
     TXSample *out = (TXSample *)output;
     double phase = 2*M_PI;
@@ -141,7 +141,7 @@ static void naive_rdft_c2r(TXComplex *output, TXComplex *input, int len)
     }
 }
 
-static void naive_imdct(TXSample *dst, TXSample *src, int len)
+static av_unused void naive_imdct(TXSample *dst, TXSample *src, int len)
 {
     len >>= 1;
 
@@ -166,10 +166,8 @@ static void naive_imdct(TXSample *dst, TXSample *src, int len)
     }
 }
 
-static void naive_imdct_full(TXSample *dst, TXSample *src, int len)
+static av_unused void naive_imdct_full(TXSample *dst, TXSample *src, int len)
 {
-    const double phase = M_PI/(4.0*len);
-
     for (int i = 0; i < len*2; i++) {
         double sum = 0.0;
         for (int j = 0; j < len; j++) {
@@ -180,7 +178,7 @@ static void naive_imdct_full(TXSample *dst, TXSample *src, int len)
     }
 }
 
-static void naive_mdct(TXSample *dst, TXSample *src, int len)
+static av_unused void naive_mdct(TXSample *dst, TXSample *src, int len)
 {
     const double phase = M_PI/(4.0*len);
 
@@ -194,31 +192,28 @@ static void naive_mdct(TXSample *dst, TXSample *src, int len)
     }
 }
 
-#if 0
-static void expand_output(TXComplex *buffer, int len)
-{
-    TXSample *input = (TXSample *)(buffer + len/2);
-    input--;
-
-    for (int i = (len - 1); i >= 0; i--) {
-        buffer[i] = (TXComplex){*input, 0};
-        input--;
-    }
-}
-#endif
-
 av_tx_fn tx;
-void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
+void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *_input, int len)
 {
 #if IN_PLACE
     memcpy(output, input, len*sizeof(TXComplex));
+#endif
+    TXComplex *input = _input;
+#if MODE == C2R || MODE == R2C
+    input = av_mallocz((len+(MODE == C2R))*sizeof(*input));
+    memcpy(input, _input, (len+(MODE == C2R))*sizeof(*input));
 #endif
 
     int64_t start = av_gettime_relative();
 
     for (int i = 0; i < REPS; i++) {
         START_TIMER
-        tx(s, output, IN_PLACE ? output : input, sizeof(TXComplex) >> MDCT);
+        tx(s, output, IN_PLACE ? output : input,
+#if MODE == MDCT
+           sizeof(TXSample));
+#else
+           sizeof(TXComplex));
+#endif
 #if MODE == MDCT
 #if INVERSE
         STOP_TIMER("        av_tx (imdct)");
@@ -238,6 +233,13 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
 #endif
     }
 
+#if MODE == C2R
+    for (int i = 0; i < len; i++) {
+        output[i].re *= 2;
+        output[i].im *= 2;
+    }
+#endif
+
     if (REPS > 1)
         printf("Total for len %i reps %i = %f s\n", len, REPS,
                (av_gettime_relative() - (double)start)/1000000.0);
@@ -245,11 +247,17 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *input, int len)
 
 #if AVFFT
 #if MODE == C2R || MODE == R2C
-void do_lavc_tx(RDFTContext *avfft, TXComplex *output, TXComplex *input, int len)
+void do_lavc_tx(RDFTContext *avfft, TXComplex *output, TXComplex *_input, int len)
 #else
-void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
+void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *_input, int len)
 #endif
 {
+    TXComplex *input = _input;
+#if MODE == C2R || MODE == R2C
+    input = av_mallocz((len+(MODE == C2R))*sizeof(*input));
+    memcpy(input, _input, (len+(MODE == C2R))*sizeof(*input));
+#endif
+
 #if MODE == C2R
     TXSample tmp = input[len].re;
     input[len].re = input[0].im;
@@ -310,11 +318,17 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *input, int len)
 
 #if FFTW
 #if DOUBLE
-void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *input, int len)
+void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
 #else
-void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *input, int len)
+void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
 #endif
 {
+    TXComplex *input = _input;
+#if MODE == C2R || MODE == R2C
+    input = av_mallocz((len+(MODE == C2R))*sizeof(*input));
+    memcpy(input, _input, (len+(MODE == C2R))*sizeof(*input));
+#endif
+
 #if IN_PLACE
     memcpy(output, input, len*sizeof(TXComplex));
 #endif
@@ -394,14 +408,17 @@ int main(void)
     int ret = av_tx_init(&avfftctx, &tx,
 #if MODE == MDCT
                          DOUBLE ? AV_TX_DOUBLE_MDCT : AV_TX_FLOAT_MDCT,
-#elif MODE == R2C
-                         DOUBLE ? AV_TX_FLOAT_R2C_DFT : AV_TX_DOUBLE_R2C_DFT,
-#elif MODE == C2R
-                         DOUBLE ? AV_TX_FLOAT_C2R_DFT : AV_TX_DOUBLE_R2C_DFT,
+#elif MODE == R2C || MODE == C2R
+                         DOUBLE ? AV_TX_DOUBLE_RDFT : AV_TX_FLOAT_RDFT,
 #else
                          DOUBLE ? AV_TX_DOUBLE_FFT : AV_TX_FLOAT_FFT,
 #endif
-                         inv, tx_len, &scale,
+                         MODE == C2R ? 1 : inv,
+#if MODE == R2C || MODE == C2R
+                         2*tx_len, &scale,
+#else
+                         tx_len, &scale,
+#endif
                          (IN_PLACE ? AV_TX_INPLACE : 0x0) |
                          (IMDCT_F ? AV_TX_FULL_IMDCT : 0x0) |
                          (NO_SIMD ? AV_TX_UNALIGNED : 0x0));
