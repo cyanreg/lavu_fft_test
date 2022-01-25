@@ -197,7 +197,7 @@ av_tx_fn tx;
 void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *_input, int len)
 {
 #if IN_PLACE
-    memcpy(output, input, len*sizeof(TXComplex));
+    memcpy(output, _input, len*sizeof(TXComplex));
 #endif
     TXComplex *input = _input;
 #if MODE == C2R || MODE == R2C
@@ -234,11 +234,8 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *_input, int len)
 #endif
     }
 
-#if MODE == C2R
-    for (int i = 0; i < len; i++) {
-        output[i].re *= 2;
-        output[i].im *= 2;
-    }
+#if MODE == C2R || MODE == R2C
+    av_freep(&input);
 #endif
 
     if (REPS > 1)
@@ -304,6 +301,10 @@ void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *_input, int len
         printf("Total for len %i reps %i = %f s\n", len, REPS,
                (av_gettime_relative() - (double)start)/1000000.0);
 
+#if MODE == C2R || MODE == R2C
+    av_freep(&input);
+#endif
+
 #if MODE == C2R
     for (int i = 0; i < len; i++) {
         output[i].re *= 2;
@@ -346,6 +347,10 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int 
         STOP_TIMER("        fftwf_execute");
 #endif
     }
+
+#if MODE == C2R || MODE == R2C
+    av_freep(&input);
+#endif
 
     if (REPS > 1)
         printf("Total for len %i reps %i = %f s\n", len, REPS,
@@ -438,6 +443,11 @@ int main(void)
 
     size_t alloc_in = sizeof(TXComplex)*num_in;
     size_t alloc_out = sizeof(TXComplex)*num_out;
+
+#if PRINT_IN
+    alloc_in = FFMAX(alloc_in, alloc_out);
+    alloc_out = FFMAX(alloc_in, alloc_out);
+#endif
 
     TXComplex *input = av_mallocz(alloc_in);
 
