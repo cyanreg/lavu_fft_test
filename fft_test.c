@@ -384,6 +384,8 @@ int main(void)
     int inv = INVERSE;
     int tx_len = FFT_LEN;
 
+    av_log_set_level(AV_LOG_VERBOSE);
+
     if (NO_SIMD)
         av_force_cpu_flags(0);
 
