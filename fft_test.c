@@ -17,22 +17,23 @@
 #define R2C       2
 #define C2R       3
 
-#define MODE C2R
+#define MODE FFT
 #define INVERSE   0 // Transform direction (only for MDCT and FFT)
 
 /* Double-precision instead of float */
 #define DOUBLE    0
 
 #define FFTW      1
-#define AVFFT     1
+#define AVFFT     0
 
-#define FFT_LEN   16
+#define FFT_LEN   8
 #define REPS     (1 << 0)
 #define IN_PLACE  0
 #define NO_SIMD   0
 #define IMDCT_F   0
 #define SEED      0x8063
 #define PRINTOUT  1
+#define PRINT_IN  1
 
 #if MODE == MDCT
 #undef FFTW
@@ -562,6 +563,9 @@ int main(void)
 #if PRINTOUT
      compare_all(
         (TXComplex *[]){
+#if PRINT_IN
+            input,
+#endif
             output_naive,
             output_new,
 #if FFTW
@@ -573,6 +577,9 @@ int main(void)
         },
         num_out,
         (const char *[]){
+#if PRINT_IN
+            "input",
+#endif
             "naive",
             "lavu",
 #if FFTW
@@ -582,7 +589,7 @@ int main(void)
             "lavc",
 #endif
         },
-        2 + !!FFTW + !!AVFFT);
+        2 + !!FFTW + !!AVFFT + !!PRINT_IN);
 #endif
 
     compare_results(output_naive, output_new, num_out,      "  av_tx");
