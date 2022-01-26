@@ -444,7 +444,7 @@ int main(void)
     size_t alloc_in = sizeof(TXComplex)*num_in;
     size_t alloc_out = sizeof(TXComplex)*num_out;
 
-#if PRINT_IN
+#if PRINTOUT && PRINT_IN
     alloc_in = FFMAX(alloc_in, alloc_out);
     alloc_out = FFMAX(alloc_in, alloc_out);
 #endif
