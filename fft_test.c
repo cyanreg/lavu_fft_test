@@ -358,15 +358,27 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int 
 }
 #endif
 
+#include <float.h>
+
 void compare_results(TXComplex *ref, TXComplex *dut, int len, const char *str)
 {
+    int matches = 0;
     double err = 0.0;
+    int first_mismatch_idx = -1;
     for (int i = 0; i < len; i++) {
+        int m_before = matches;
+        for (int j = 0; j < len; j++) {
+            matches += (fabs(ref[j].re - dut[i].re) < FLT_EPSILON) +
+                       (fabs(ref[j].im - dut[i].im) < FLT_EPSILON);
+        }
+        if ((m_before == matches) && (first_mismatch_idx < 0))
+            first_mismatch_idx = i;
         err += (ref[i].re - dut[i].re)*(ref[i].re - dut[i].re);
         err += (ref[i].im - dut[i].im)*(ref[i].im - dut[i].im);
     }
 
-    printf("RMSE %s = %f\n", str, sqrtf(err / (len*2)));
+    printf("RMSE %s = %f (%i matches, first mismatch at %i)\n",
+           str, sqrtf(err / (len*2)), matches, first_mismatch_idx);
 }
 
 void compare_all(TXComplex *all[], int len, const char *names[], int num_arr)
@@ -543,6 +555,7 @@ int main(void)
 #if AVFFT
     memcpy(input_lavc, input, alloc_in);
 #endif
+    av_log_set_level(AV_LOG_INFO);
 
     do_avfft_tx(avfftctx, output_new, input, tx_len);
 #if AVFFT
