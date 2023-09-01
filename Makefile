@@ -2,7 +2,7 @@
 INCLUDES = -I "$(FFMPEG_PATH)"
 LAVU_LIB = "$(FFMPEG_PATH)/libavutil/libavutil.a"
 LAVC_LIB = "$(FFMPEG_PATH)/libavcodec/libavcodec.a"
-CFLAGS = -Og -g -Wall -lpthread
+CFLAGS = -O0 -g -Wall -lpthread
 LIBS = $(LAVU_LIB) $(LAVC_LIB) -lm -lfftw3 -lfftw3f -lpthread
 OBJ = fft_test.c
 
