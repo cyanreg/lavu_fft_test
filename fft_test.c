@@ -22,39 +22,32 @@
 #define DCT1      5
 #define DST1      6
 
-#define MODE DCT1
+#define MODE R2C
 #define INVERSE   0 // Transform direction (only for MDCT and FFT)
 
 /* Double-precision instead of float */
 #define DOUBLE    0
 
-#define FFTW      1
-#define AVFFT     1
+#define FFTW      0
 
-#define FFT_LEN   16
+#define FFT_LEN   32
 #define REPS     (1 << 0)
 #define IN_PLACE  0
-#define NO_SIMD   0
 #define NOSHUF    0
 #define IMDCT_F   0
 #define REAL_TO_REAL 0
 #define REAL_TO_IMAGINARY 0
 #define SEED      0x8083
 #define PRINTOUT  1
-#define PRINT_IN  0
+#define PRINT_IN  1
+
+#ifndef NO_SIMD
+#define NO_SIMD   0
+#endif
 
 #if MODE == MDCT
 #undef FFTW
 #define FFTW 0
-#endif
-
-#if DOUBLE == 1
-#undef AVFFT
-#define AVFFT 0
-#endif
-
-#if AVFFT
-#include <libavcodec/avfft.h>
 #endif
 
 #if FFTW
@@ -62,8 +55,6 @@
 #endif
 
 #if DOUBLE
-#undef AVFFT
-#define AVFFT 0
 typedef double TXSample;
 typedef AVComplexDouble TXComplex;
 #else
@@ -313,91 +304,6 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *_input, int len)
                (av_gettime_relative() - (double)start)/1000000.0);
 }
 
-#if AVFFT
-#if MODE == C2R || MODE == R2C
-void do_lavc_tx(RDFTContext *avfft, TXComplex *output, TXComplex *_input, int len)
-#elif MODE == DCT23 || MODE == DCT1 || MODE == DST1
-void do_lavc_tx(DCTContext *avfft, TXComplex *output, TXComplex *_input, int len)
-#else
-void do_lavc_tx(FFTContext *avfft, TXComplex *output, TXComplex *_input, int len)
-#endif
-{
-    TXComplex *input = _input;
-#if MODE == C2R || MODE == R2C || MODE == DCT23
-    input = av_mallocz((len+(MODE == C2R))*sizeof(*input));
-    memcpy(input, _input, (len+(MODE == C2R))*sizeof(*input));
-#endif
-
-#if MODE == C2R
-    TXSample tmp = input[len].re;
-    input[len].re = input[0].im;
-    input[0].im = tmp;
-#endif
-
-#if (MODE != MDCT) && IN_PLACE
-    memcpy(output, input, len*sizeof(TXComplex));
-#endif
-
-    int64_t start = av_gettime_relative();
-
-    for (int i = 0; i < REPS; i++) {
-        START_TIMER
-#if (MODE != MDCT) && !IN_PLACE
-        memcpy(output, input, len*sizeof(TXComplex));
-#endif
-
-#if MODE == MDCT
-#if INVERSE
-#if IMDCT_F
-        av_imdct_calc(avfft, (FFTSample *)output, (const FFTSample *)input);
-        STOP_TIMER("        av_imdct_calc");
-#else
-        av_imdct_half(avfft, (FFTSample *)output, (const FFTSample *)input);
-        STOP_TIMER("        av_imdct_half");
-#endif
-#else
-        av_mdct_calc(avfft, (FFTSample *)output, (const FFTSample *)input);
-        STOP_TIMER("         av_mdct_calc");
-#endif
-#elif MODE == C2R || MODE == R2C
-        av_rdft_calc(avfft, (FFTSample *)output);
-        STOP_TIMER("         av_rdft_calc");
-#elif MODE == DCT23 || MODE == DCT1 || MODE == DST1
-        av_dct_calc(avfft, (FFTSample *)output);
-        STOP_TIMER("          av_dct_calc");
-#else
-        av_fft_permute(avfft, (FFTComplex *)output);
-        av_fft_calc(avfft, (FFTComplex *)output);
-        STOP_TIMER("  av_fft_permute+calc");
-#endif
-    }
-
-    if (REPS > 1)
-        printf("Total for len %i reps %i = %f s\n", len, REPS,
-               (av_gettime_relative() - (double)start)/1000000.0);
-
-#if MODE == C2R || MODE == R2C || MODE == DCT23
-    av_freep(&input);
-#endif
-
-#if MODE == C2R || (MODE == DCT23 && !INVERSE) || MODE == DCT1
-    for (int i = 0; i < len; i++) {
-        output[i].re *= 2;
-        output[i].im *= 2;
-    }
-#elif (MODE == DCT23 && INVERSE)
-   for (int i = 0; i < len; i++) {
-        output[i].re *= (double)len/0.5;
-        output[i].im *= (double)len/0.5;
-    }
-#elif MODE == R2C
-    TXSample tmp = output[len].re;
-    output[len].re = output[0].im;
-    output[0].im = tmp;
-#endif
-}
-#endif
-
 #if FFTW
 #if DOUBLE
 void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
@@ -557,7 +463,7 @@ int main(void)
 #else
                          MODE == C2R ? 1 : inv,
 #endif
-#if MODE == R2C || MODE == C2R || (MODE == DCT23 && !INVERSE) || (MODE == DCT1) || (MODE == DST1)
+#if MODE == R2C || MODE == C2R || MODE == DCT23 || (MODE == DCT1) || (MODE == DST1)
                          2*tx_len, &scale,
 #else
                          tx_len, &scale,
@@ -588,37 +494,13 @@ int main(void)
 #endif
 
     TXComplex *input = av_mallocz(alloc_in);
-
-#if AVFFT
-    TXComplex *input_lavc = av_mallocz(alloc_in);
-    TXComplex *output_lavc = av_mallocz(alloc_out);
-#endif
-#if FFTW
-    TXComplex *input_fftw = av_mallocz(alloc_in);
-    TXComplex *output_fftw = av_mallocz(alloc_out);
-#endif
-
     TXComplex *output_new = av_mallocz(alloc_out);
     TXComplex *output_naive = av_mallocz(alloc_out);
 
-#if AVFFT
-#if MODE == MDCT
-    FFTContext *avfft = av_mdct_init(av_log2(tx_len) + 1, inv, scale);
-#elif MODE == R2C
-    RDFTContext *avfft = av_rdft_init(av_log2(tx_len) + 1, DFT_R2C);
-#elif MODE == C2R
-    RDFTContext *avfft = av_rdft_init(av_log2(tx_len) + 1, IDFT_C2R);
-#elif MODE == DCT23
-    DCTContext *avfft = av_dct_init(av_log2(tx_len) + 1, !INVERSE ? DCT_II : DCT_III);
-#elif MODE == DST1
-    DCTContext *avfft = av_dct_init(av_log2(tx_len) + 1, DST_I);
-#elif MODE == DCT1
-    DCTContext *avfft = av_dct_init(av_log2(tx_len) + 1, DCT_I);
-#else
-    FFTContext *avfft = av_fft_init(av_log2(tx_len), inv);
-#endif
-#endif
 #if FFTW
+    TXComplex *input_fftw = av_mallocz(alloc_in);
+    TXComplex *output_fftw = av_mallocz(alloc_out);
+
 #if MODE == FFT
 #if DOUBLE
     fftw_plan fftw_plan = fftw_plan_dft_1d  (tx_len, IN_PLACE ?
@@ -759,16 +641,9 @@ int main(void)
 #if FFTW
     memcpy(input_fftw, input, alloc_in);
 #endif
-#if AVFFT
-    memcpy(input_lavc, input, alloc_in);
-#endif
     av_log_set_level(AV_LOG_INFO);
 
     do_avfft_tx(avfftctx, output_new, input, tx_len);
-#if AVFFT
-    if (!(tx_len & (tx_len - 1)))
-        do_lavc_tx(avfft, output_lavc, input_lavc, tx_len);
-#endif
 #if FFTW
     do_fftw_tx(fftw_plan, output_fftw, input, tx_len);
 #endif
@@ -814,9 +689,6 @@ int main(void)
 #if FFTW
             output_fftw,
 #endif
-#if AVFFT
-            output_lavc,
-#endif
         },
         num_out,
         (const char *[]){
@@ -828,11 +700,8 @@ int main(void)
 #if FFTW
             "fftw",
 #endif
-#if AVFFT
-            "lavc",
-#endif
         },
-        2 + !!FFTW + !!AVFFT + !!PRINT_IN);
+        2 + !!FFTW + !!PRINT_IN);
 #endif
 
     compare_results(output_naive, output_new, num_out,      "  av_tx");
@@ -845,11 +714,6 @@ int main(void)
 #endif
 #endif
 
-#if AVFFT
-    if (!(tx_len & (tx_len - 1)))
-        compare_results(output_naive, output_lavc, num_out, "  avfft");
-#endif
-
 #if FFTW
 #if DOUBLE
     fftw_destroy_plan(fftw_plan);
@@ -858,30 +722,15 @@ int main(void)
 #endif
 #endif
 
-#if AVFFT
-#if MODE == MDCT
-    av_mdct_end(avfft);
-#elif MODE == R2C || MODE == C2R
-    av_rdft_end(avfft);
-#elif MODE == DCT23 || MODE == DCT1 || MODE == DST1
-    av_dct_end(avfft);
-#else
-    av_fft_end(avfft);
-#endif
-#endif
-    av_tx_uninit(&avfftctx);
-
-    av_free(input);
-#if AVFFT
-    av_free(input_lavc);
-    av_free(output_lavc);
-#endif
-    av_free(output_naive);
 #if FFTW
     av_free(input_fftw);
     av_free(output_fftw);
 #endif
+
+    av_free(input);
+    av_free(output_naive);
     av_free(output_new);
+    av_tx_uninit(&avfftctx);
 
     return 0;
 }
