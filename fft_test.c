@@ -22,15 +22,15 @@
 #define DCT1      5
 #define DST1      6
 
-#define MODE R2C
+#define MODE FFT
 #define INVERSE   0 // Transform direction (only for MDCT and FFT)
 
 /* Double-precision instead of float */
 #define DOUBLE    0
 
-#define FFTW      0
+#define FFTW      1
 
-#define FFT_LEN   32
+#define FFT_LEN   2097152
 #define REPS     (1 << 0)
 #define IN_PLACE  0
 #define NOSHUF    0
@@ -38,8 +38,8 @@
 #define REAL_TO_REAL 0
 #define REAL_TO_IMAGINARY 0
 #define SEED      0x8083
-#define PRINTOUT  1
-#define PRINT_IN  1
+#define PRINTOUT  0
+#define PRINT_IN  0
 
 #ifndef NO_SIMD
 #define NO_SIMD   0
