@@ -22,16 +22,17 @@
 #define DCT1      5
 #define DST1      6
 
-#define MODE FFT
-#define INVERSE   0 // Transform direction (only for MDCT and FFT)
+#define MODE MDCT
+#define INVERSE   1 // Transform direction (only for MDCT and FFT)
 
 /* Double-precision instead of float */
 #define DOUBLE    0
 
 #define FFTW      1
+#define OPUS_MDCT 1
 
-#define FFT_LEN   2097152
-#define REPS     (1 << 0)
+#define FFT_LEN   960
+#define REPS     (1 << 18)
 #define IN_PLACE  0
 #define NOSHUF    0
 #define IMDCT_F   0
@@ -43,6 +44,15 @@
 
 #ifndef NO_SIMD
 #define NO_SIMD   0
+#endif
+
+#if MODE != MDCT
+#undef OPUS_MDCT
+#define OPUS_MDCT 0
+#endif
+
+#if OPUS_MDCT
+#include "kiss_fft/mdct.h"
 #endif
 
 #if MODE == MDCT
@@ -306,9 +316,9 @@ void do_avfft_tx(AVTXContext *s, TXComplex *output, TXComplex *_input, int len)
 
 #if FFTW
 #if DOUBLE
-void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
+static void do_fftw_tx(fftw_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
 #else
-void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
+static void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int len)
 #endif
 {
     TXComplex *input = _input;
@@ -341,6 +351,33 @@ void do_fftw_tx(fftwf_plan fftw_plan, TXComplex *output, TXComplex *_input, int 
     if (REPS > 1)
         printf("Total for len %i reps %i = %f s\n", len, REPS,
                (av_gettime_relative() - (double)start)/1000000.0);
+}
+#endif
+
+#if OPUS_MDCT
+static void opus_mdct(mdct_lookup *l, TXComplex *dst, TXComplex *src, int len)
+{
+    int64_t start = av_gettime_relative();
+
+    for (int i = 0; i < REPS; i++) {
+        START_TIMER
+#if INVERSE
+        clt_mdct_backward(l, (kiss_fft_scalar *)src, (kiss_fft_scalar *)dst, NULL, 0, 0, 1, 0);
+        STOP_TIMER("    clt_mdct_backward");
+#else
+        clt_mdct_forward(l, (kiss_fft_scalar *)src, (kiss_fft_scalar *)dst, NULL, 0, 0, 1, 0);
+        STOP_TIMER("     clt_mdct_forward");
+#endif
+    }
+
+    if (REPS > 1)
+        printf("Total for len %i reps %i = %f s\n", len, REPS,
+               (av_gettime_relative() - (double)start)/1000000.0);
+
+    for (int i = 0; i < len; i++) {
+        dst[i].re *= -1;
+        dst[i].im *= -1;
+    }
 }
 #endif
 
@@ -497,6 +534,17 @@ int main(void)
     TXComplex *output_new = av_mallocz(alloc_out);
     TXComplex *output_naive = av_mallocz(alloc_out);
 
+#if OPUS_MDCT
+    int kiss_arch = 0;
+    mdct_lookup opus_ctx;
+    TXComplex *output_opus = av_mallocz(alloc_out);
+    ret = clt_mdct_init(&opus_ctx, tx_len*2, 0, kiss_arch);
+    if (!ret) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot init opus mdct\n");
+        return 1;
+    }
+#endif
+
 #if FFTW
     TXComplex *input_fftw = av_mallocz(alloc_in);
     TXComplex *output_fftw = av_mallocz(alloc_out);
@@ -647,6 +695,9 @@ int main(void)
 #if FFTW
     do_fftw_tx(fftw_plan, output_fftw, input, tx_len);
 #endif
+#if OPUS_MDCT
+    opus_mdct(&opus_ctx, output_opus, input, tx_len);
+#endif
 
 #if MODE == MDCT
 #if INVERSE
@@ -678,6 +729,10 @@ int main(void)
     num_out = 1 + num_out/2;
 #endif
 
+#if (MODE == MDCT) && (INVERSE == 0)
+    num_out /= 2;
+#endif
+
 #if PRINTOUT
      compare_all(
         (TXComplex *[]){
@@ -688,6 +743,9 @@ int main(void)
             output_new,
 #if FFTW
             output_fftw,
+#endif
+#if OPUS_MDCT
+            output_opus,
 #endif
         },
         num_out,
@@ -700,11 +758,15 @@ int main(void)
 #if FFTW
             "fftw",
 #endif
+#if OPUS_MDCT
+            "opus",
+#endif
         },
-        2 + !!FFTW + !!PRINT_IN);
+        2 + !!FFTW + !!OPUS_MDCT + !!PRINT_IN);
 #endif
 
     compare_results(output_naive, output_new, num_out,      "  av_tx");
+    compare_results(output_naive, output_opus, num_out,     "   opus");
 
 #if FFTW
 #if DOUBLE

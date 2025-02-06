@@ -2,16 +2,20 @@
 INCLUDES = -I "$(FFMPEG_PATH)"
 LAVU_LIB = "$(FFMPEG_PATH)/libavutil/libavutil.a"
 #LAVC_LIB = "$(FFMPEG_PATH)/libavcodec/libavcodec.a"
-CFLAGS = -O0 -g -Wall -lpthread
+CFLAGS = -O2 -g -Wall -lpthread
+DEFINES = -DUSE_ALLOCA -DCUSTOM_MODES
 LIBS = $(LAVU_LIB) -lm -lfftw3 -lfftw3f -lpthread
-OBJ = fft_test.c
+OBJ = fft_test.c kiss_fft/kiss_fft.c kiss_fft/mdct.c
 
 lavu:
 	$(MAKE) -C $(FFMPEG_PATH)
 
+ne10:
+	$(CC) $(DEFINES) -DHAVE_ARM_NE10 $(CFLAGS) $(INCLUDES) $(OBJ) kiss_fft/arm/celt_fft_ne10.c kiss_fft/arm/celt_mdct_ne10.c -o $@ $(LIBS) -lNE10
+
 .DEFAULT_GOAL :=
 fft_test: lavu $(OBJ)
-	$(CC) $(CFLAGS) $(INCLUDES) $(OBJ) -o $@ $(LIBS)
+	$(CC) $(DEFINES) $(CFLAGS) $(INCLUDES) $(OBJ) -o $@ $(LIBS)
 
 clean:
 	-rm -f fft_test
